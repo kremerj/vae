@@ -68,13 +68,13 @@ class VAE(object):
 
     def _create_model(self):
         self.x = tf.placeholder(tf.float32, [None, self.n_input])
-        mu, log_sigma_squared, sigma_squared, sigma = self._create_encoder(self.x)
+        self.mu, log_sigma_squared, sigma_squared, sigma = self._create_encoder(self.x)
 
         self.epsilon = tf.placeholder(tf.float32, self.n_latent)
-        self.z = mu + sigma * self.epsilon
+        self.z = self.mu + sigma * self.epsilon
         y_logit, self.y = self._create_decoder(self.z)
 
-        regularizer = -0.5 * tf.reduce_sum(1 + log_sigma_squared - tf.square(mu) - sigma_squared, 1)
+        regularizer = -0.5 * tf.reduce_sum(1 + log_sigma_squared - tf.square(self.mu) - sigma_squared, 1)
         recon_error = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=y_logit, labels=self.x), 1)
         weight_decay = self._create_weight_decay()
         loss = tf.reduce_mean(regularizer + recon_error) + weight_decay
@@ -86,26 +86,37 @@ class VAE(object):
         optimizer = tf.train.AdamOptimizer(learning_rate).minimize(loss, global_step=self.current_step)
         return optimizer
 
-    def fit(self, X, refit=True):
+    def _compute_loss(self, session, batch, optimize=True):
+        epsilon = np.random.randn(self.n_latent).astype(np.float32)
+        ops = [self.loss, self.optimizer] if optimize else [self.loss]
+        loss = session.run(ops, {self.x: batch[0], self.epsilon: epsilon})[0]
+        return loss
+
+    def fit(self, train, validation, refit=True):
         graph = self._create_graph()
         session = tf.Session(graph=graph)
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(session, coord)
         session.run(self.initializer) if refit else self.saver.restore(session, self.checkpoint_path)
         initial_step = session.run(self.current_step)
-        n_step = X.num_examples // self.n_batch * self.n_epoch
+        n_step = train.num_examples // self.n_batch * self.n_epoch
         start = time.time()
         np.random.seed(self.seed)
 
         try:
+            loss_train = 0.
+            loss_val = 0.
             for step in range(initial_step, n_step):
-                x, _ = X.next_batch(self.n_batch)
-                epsilon = np.random.randn(self.n_latent).astype(np.float32)
-                loss, _ = session.run([self.loss, self.optimizer], {self.x: x, self.epsilon: epsilon})
+                loss_train += self._compute_loss(session, train.next_batch(self.n_batch))
+                loss_val += self._compute_loss(session, validation.next_batch(self.n_batch), optimize=False)
 
-                if step % 100 == 0:
-                    print('epoch: %d, step: %d, mini-batch error: %1.4f, time elapsed: %ds' % (
-                    X.epochs_completed, step, loss, (time.time() - start)))
+                if (step * self.n_batch) % train.num_examples == 0:
+                    train_error = self.n_batch / train.num_examples * loss_train
+                    val_error = self.n_batch / train.num_examples * loss_val
+                    loss_train = 0.
+                    loss_val = 0.
+                    print('epoch: %d, step: %d, training error: %1.4f, validation error: %1.4f, time elapsed %ds' % (
+                    train.epochs_completed, step, train_error, val_error, time.time()-start))
         except KeyboardInterrupt:
             print('ending training')
         finally:
@@ -117,7 +128,7 @@ class VAE(object):
 
     def _sample_2d_grid(self, grid_width):
         epsilon = norm.ppf(np.linspace(0, 1, grid_width + 2)[1:-1])
-        epsilon_2d = np.dstack(np.meshgrid(epsilon, epsilon)).reshape(-1, 2)
+        epsilon_2d = np.dstack(np.meshgrid(epsilon, -epsilon)).reshape(-1, 2)
         return epsilon_2d
 
     def decode(self, z):
@@ -127,17 +138,32 @@ class VAE(object):
             y = session.run(self.y, {self.z: z})
         return y
 
+    def encode(self, x):
+        graph = self._create_graph()
+        with tf.Session(graph=graph) as session:
+            self.saver.restore(session, self.checkpoint_path)
+            y = session.run(self.mu, {self.x: x})
+        return y
+
     def mosaic(self, grid_width=20):
         z = self._sample_2d_grid(grid_width)
         image_width = int(np.sqrt(self.n_input))
-        mos = np.bmat(np.reshape(self.decode(z), [grid_width, grid_width, image_width, image_width]).tolist())
+        images = np.reshape(self.decode(z), [grid_width, grid_width, image_width, image_width])
+        mos = 1 - np.bmat(images.tolist())
         return mos
 
 if __name__ == '__main__':
     data = input_data.read_data_sets('MNIST data')
     vae = VAE(activation=tf.nn.relu)
-    vae.fit(data.train, refit=True)
+    vae.fit(data.train, data.test, refit=False)
+    latent_space = vae.encode(data.test.images)
     mosaic = vae.mosaic()
-    plt.imshow(mosaic, cmap='gray')
-    plt.axis('off')
+    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+    ax1.imshow(mosaic, cmap='gray')
+    ax1.set_title('Learned MNIST manifold')
+    ax1.axis('off')
+    sc = ax2.scatter(latent_space[:, 0], latent_space[:, 1], c=data.test.labels, marker='.', cmap='tab10')
+    ax2.set_title('Latent representation')
+    ax2.axis('equal')
+    f.colorbar(sc, ax=ax2)
     plt.show()
