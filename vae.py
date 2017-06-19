@@ -1,11 +1,11 @@
 import tensorflow as tf
 import numpy as np
 import time
+import seaborn as sns
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 
 from tensorflow.examples.tutorials.mnist import input_data
-
 
 class VAE(object):
     def __init__(self, n_batch=100, n_input=784, n_latent=2, n_hidden=500, learning_rate=0.001,
@@ -35,7 +35,7 @@ class VAE(object):
 
     def _create_weights(self, shape):
         W = tf.Variable(tf.random_normal(shape, stddev=self.stddev_init))
-        b = tf.Variable(np.zeros(shape[1]).astype(np.float32))
+        b = tf.Variable(0.1*np.ones(shape[1]).astype(np.float32))
         return W, b
 
     def _create_weight_decay(self):
@@ -104,15 +104,18 @@ class VAE(object):
         np.random.seed(self.seed)
 
         try:
+            self.learning_curve = {'train': [], 'val': []}
             loss_train = 0.
             loss_val = 0.
             for step in range(initial_step, n_step):
                 loss_train += self._compute_loss(session, train.next_batch(self.n_batch))
                 loss_val += self._compute_loss(session, validation.next_batch(self.n_batch), optimize=False)
 
-                if (step * self.n_batch) % train.num_examples == 0:
+                if (step * self.n_batch) % train.num_examples == 0 and step > 0:
                     train_error = self.n_batch / train.num_examples * loss_train
                     val_error = self.n_batch / train.num_examples * loss_val
+                    self.learning_curve['train'] += [train_error]
+                    self.learning_curve['val'] += [val_error]
                     loss_train = 0.
                     loss_val = 0.
                     print('epoch: %d, step: %d, training error: %1.4f, validation error: %1.4f, time elapsed %ds' % (
@@ -155,9 +158,12 @@ class VAE(object):
 if __name__ == '__main__':
     data = input_data.read_data_sets('MNIST data')
     vae = VAE(activation=tf.nn.relu)
-    vae.fit(data.train, data.test, refit=False)
+    vae.fit(data.train, data.test, refit=True)
     latent_space = vae.encode(data.test.images)
     mosaic = vae.mosaic()
+
+    sns.set_color_codes()
+    sns.set_style('white')
     f, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
     ax1.imshow(mosaic, cmap='gray')
     ax1.set_title('Learned MNIST manifold')
@@ -166,4 +172,15 @@ if __name__ == '__main__':
     ax2.set_title('Latent representation')
     ax2.axis('equal')
     f.colorbar(sc, ax=ax2)
+    sns.despine()
+    plt.show()
+
+    plt.figure()
+    epochs = range(len(vae.learning_curve['train']))
+    plt.plot(epochs, vae.learning_curve['train'], 'r-', label='training loss')
+    plt.plot(epochs, vae.learning_curve['val'], 'b-', label='validation loss')
+    plt.title('Learning curve')
+    plt.ylabel('negative ELBO')
+    plt.xlabel('epoch')
+    sns.despine()
     plt.show()
