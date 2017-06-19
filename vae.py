@@ -114,8 +114,8 @@ class VAE(object):
                 if (step * self.n_batch) % train.num_examples == 0 and step > 0:
                     train_error = self.n_batch / train.num_examples * loss_train
                     val_error = self.n_batch / train.num_examples * loss_val
-                    self.learning_curve['train'] += [train_error]
-                    self.learning_curve['val'] += [val_error]
+                    self.learning_curve['train'] += [-train_error]
+                    self.learning_curve['val'] += [-val_error]
                     loss_train = 0.
                     loss_val = 0.
                     print('epoch: %d, step: %d, training error: %1.4f, validation error: %1.4f, time elapsed %ds' % (
@@ -177,10 +177,11 @@ if __name__ == '__main__':
 
     plt.figure()
     epochs = range(len(vae.learning_curve['train']))
-    plt.plot(epochs, vae.learning_curve['train'], 'r-', label='training loss')
-    plt.plot(epochs, vae.learning_curve['val'], 'b-', label='validation loss')
+    plt.plot(epochs, vae.learning_curve['train'], 'b-', label='ELBO training')
+    plt.plot(epochs, vae.learning_curve['val'], 'r-', label='ELBO validation')
     plt.title('Learning curve')
-    plt.ylabel('negative ELBO')
+    plt.ylabel('ELBO')
     plt.xlabel('epoch')
+    plt.legend(frameon=True)
     sns.despine()
     plt.show()
