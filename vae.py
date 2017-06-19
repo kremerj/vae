@@ -9,7 +9,7 @@ from tensorflow.examples.tutorials.mnist import input_data
 
 class VAE(object):
     def __init__(self, n_batch=100, n_input=784, n_latent=2, n_hidden=500, learning_rate=0.001,
-                 stddev_init=0.1, weight_decay_factor=0, n_step=10**6, seed=0, activation=tf.tanh,
+                 stddev_init=0.1, weight_decay_factor=0, n_epoch=100, seed=0, activation=tf.tanh,
                  checkpoint_path='model.ckpt'):
         self.n_batch = n_batch
         self.n_input = n_input
@@ -18,16 +18,14 @@ class VAE(object):
         self.learning_rate = learning_rate
         self.stddev_init = stddev_init
         self.weight_decay_factor = weight_decay_factor
-        self.n_step = n_step
+        self.n_epoch = n_epoch
         self.seed = seed
         self.checkpoint_path = checkpoint_path
         self.activation = activation
 
     def _create_graph(self):
-        np.random.seed(self.seed)
-        tf.set_random_seed(self.seed)
-
         with tf.Graph().as_default() as graph:
+            tf.set_random_seed(self.seed)
             self.loss = self._create_model()
             self.optimizer = self._create_optimizer(self.loss, self.learning_rate)
             self.initializer = tf.global_variables_initializer()
@@ -93,20 +91,21 @@ class VAE(object):
         session = tf.Session(graph=graph)
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(session, coord)
+        session.run(self.initializer) if refit else self.saver.restore(session, self.checkpoint_path)
+        initial_step = session.run(self.current_step)
+        n_step = X.num_examples // self.n_batch * self.n_epoch
+        start = time.time()
+        np.random.seed(self.seed)
 
         try:
-            session.run(self.initializer) if refit else self.saver.restore(session, self.checkpoint_path)
-            initial_step = session.run(self.current_step)
-            start = time.time()
-            for step in range(initial_step, self.n_step):
+            for step in range(initial_step, n_step):
                 x, _ = X.next_batch(self.n_batch)
                 epsilon = np.random.randn(self.n_latent).astype(np.float32)
                 loss, _ = session.run([self.loss, self.optimizer], {self.x: x, self.epsilon: epsilon})
 
                 if step % 100 == 0:
-                    print('step: %d, mini-batch error: %1.4f, took %ds' % (step, loss, (time.time()-start)))
-                    start = time.time()
-
+                    print('epoch: %d, step: %d, mini-batch error: %1.4f, time elapsed: %ds' % (
+                    X.epochs_completed, step, loss, (time.time() - start)))
         except KeyboardInterrupt:
             print('ending training')
         finally:
@@ -121,18 +120,17 @@ class VAE(object):
         epsilon_2d = np.dstack(np.meshgrid(epsilon, epsilon)).reshape(-1, 2)
         return epsilon_2d
 
-    def decode(self, z, n_batch=None):
+    def decode(self, z):
         graph = self._create_graph()
         with tf.Session(graph=graph) as session:
             self.saver.restore(session, self.checkpoint_path)
-            n_iter = n_batch // self.n_batch if n_batch is not None else 1
-            y = [session.run(self.y, {self.z: z[i * self.n_batch:(i + 1) * self.n_batch]}) for i in range(n_iter)]
+            y = session.run(self.y, {self.z: z})
         return y
 
     def mosaic(self, grid_width=20):
         z = self._sample_2d_grid(grid_width)
-        w = int(np.sqrt(self.n_input))
-        mos = np.bmat(np.reshape(self.decode(z, n_batch=grid_width ** 2), [grid_width, grid_width, w, w]).tolist())
+        image_width = int(np.sqrt(self.n_input))
+        mos = np.bmat(np.reshape(self.decode(z), [grid_width, grid_width, image_width, image_width]).tolist())
         return mos
 
 if __name__ == '__main__':
