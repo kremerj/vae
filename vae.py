@@ -164,7 +164,7 @@ if __name__ == '__main__':
 
     sns.set_color_codes()
     sns.set_style('white')
-    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+    f, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4))
     ax1.imshow(mosaic, cmap='gray')
     ax1.set_title('Learned MNIST manifold')
     ax1.axis('off')
