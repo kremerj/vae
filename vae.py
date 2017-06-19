@@ -8,8 +8,9 @@ from tensorflow.examples.tutorials.mnist import input_data
 
 
 class VAE(object):
-    def __init__(self, n_batch=100, n_input=784, n_latent=2, n_hidden=500, learning_rate=0.01,
-                 stddev_init=0.1, weight_decay_factor=1e-4, n_step=10**6, seed=0, checkpoint_path='model.ckpt'):
+    def __init__(self, n_batch=100, n_input=784, n_latent=2, n_hidden=500, learning_rate=0.001,
+                 stddev_init=0.1, weight_decay_factor=0, n_step=10**6, seed=0, activation=tf.tanh,
+                 checkpoint_path='model.ckpt'):
         self.n_batch = n_batch
         self.n_input = n_input
         self.n_latent = n_latent
@@ -20,13 +21,14 @@ class VAE(object):
         self.n_step = n_step
         self.seed = seed
         self.checkpoint_path = checkpoint_path
+        self.activation = activation
 
-    def _create_graph(self, mode):
+    def _create_graph(self):
         np.random.seed(self.seed)
         tf.set_random_seed(self.seed)
 
         with tf.Graph().as_default() as graph:
-            self.loss = self._create_model(mode)
+            self.loss = self._create_model()
             self.optimizer = self._create_optimizer(self.loss, self.learning_rate)
             self.initializer = tf.global_variables_initializer()
             self.saver = tf.train.Saver()
@@ -39,7 +41,10 @@ class VAE(object):
         return W, b
 
     def _create_weight_decay(self):
-        return self.weight_decay_factor / 2.0 * tf.reduce_sum([tf.nn.l2_loss(v) for v in tf.trainable_variables()])
+        if self.weight_decay_factor > 0:
+            return self.weight_decay_factor / 2.0 * tf.reduce_sum([tf.nn.l2_loss(v) for v in tf.trainable_variables()])
+        else:
+            return 0
 
     def _create_encoder(self, x):
         with tf.variable_scope('encoder'):
@@ -47,7 +52,7 @@ class VAE(object):
             W4, b4 = self._create_weights([self.n_batch, self.n_latent, self.n_hidden])
             W5, b5 = self._create_weights([self.n_batch, self.n_latent, self.n_hidden])
 
-            h = tf.tanh(W3 @ x + b3)
+            h = self.activation(W3 @ x + b3)
             mu = W4 @ h + b4
             log_sigma_squared = W5 @ h + b5
             sigma_squared = tf.exp(log_sigma_squared)
@@ -59,45 +64,43 @@ class VAE(object):
             W1, b1 = self._create_weights([self.n_batch, self.n_hidden, self.n_latent])
             W2, b2 = self._create_weights([self.n_batch, self.n_input, self.n_hidden])
 
-            y_logit = W2 @ tf.tanh(W1 @ z + b1) + b2
+            y_logit = W2 @ self.activation(W1 @ z + b1) + b2
             y = tf.sigmoid(y_logit)
         return y_logit, y
 
-    def _create_model(self, mode):
+    def _create_model(self):
         self.x = tf.placeholder(tf.float32, [self.n_batch, self.n_input])
         x = tf.reshape(self.x, [self.n_batch, self.n_input, 1])
         mu, log_sigma_squared, sigma_squared, sigma = self._create_encoder(x)
 
-        if mode == 'fit':
-            self.epsilon = tf.placeholder(tf.float32, self.n_latent)
-            epsilon = tf.reshape(self.epsilon, [1, self.n_latent, 1])
-            z = mu + sigma * epsilon
-        else:
-            self.z = tf.placeholder(tf.float32, [self.n_batch, self.n_latent])
-            z = tf.reshape(self.z, [self.n_batch, self.n_latent, 1])
-        y_logit, self.y = self._create_decoder(z)
+        self.epsilon = tf.placeholder(tf.float32, self.n_latent)
+        epsilon = tf.reshape(self.epsilon, [1, self.n_latent, 1])
+        self.z = mu + sigma * epsilon
+        y_logit, self.y = self._create_decoder(self.z)
 
         regularizer = -0.5 * tf.reduce_sum(1 + log_sigma_squared - tf.square(mu) - sigma_squared, 1)
         recon_error = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=y_logit, labels=x), 1)
         weight_decay = self._create_weight_decay()
-        loss = tf.reduce_mean(regularizer) + tf.reduce_mean(recon_error) + weight_decay
+        loss = tf.reduce_mean(regularizer + recon_error) + weight_decay
         return loss
 
     def _create_optimizer(self, loss, learning_rate):
-        batch = tf.Variable(0, trainable=False)
-        optimizer = tf.train.AdagradOptimizer(learning_rate).minimize(loss, global_step=batch)
+        self.current_step = tf.Variable(0, trainable=False)
+        #optimizer = tf.train.AdagradOptimizer(learning_rate).minimize(loss, global_step=batch)
+        optimizer = tf.train.AdamOptimizer(learning_rate).minimize(loss, global_step=self.current_step)
         return optimizer
 
-    def fit(self, X):
-        graph = self._create_graph(mode='fit')
+    def fit(self, X, refit=False):
+        graph = self._create_graph()
         session = tf.Session(graph=graph)
         coord = tf.train.Coordinator()
         threads = tf.train.start_queue_runners(session, coord)
 
         try:
-            session.run(self.initializer)
+            session.run(self.initializer) if not refit else self.saver.restore(session, self.checkpoint_path)
+            initial_step = session.run(self.current_step)
             start = time.time()
-            for step in range(self.n_step):
+            for step in range(initial_step, self.n_step):
                 x = X.next_batch(self.n_batch)[0]
                 epsilon = np.random.randn(self.n_latent).astype(np.float32)
                 loss, _ = session.run([self.loss, self.optimizer], {self.x: x, self.epsilon: epsilon})
@@ -116,17 +119,17 @@ class VAE(object):
             print('finished training')
 
     def _sample_2d_grid(self, grid_width):
-        epsilon_x = norm.ppf(np.linspace(0, 1, grid_width + 2)[1:-1])
-        epsilon_y = epsilon_x.copy()
-        epsilon = np.dstack(np.meshgrid(epsilon_x, epsilon_y)).reshape(-1, 2)
-        return epsilon
+        epsilon = norm.ppf(np.linspace(0, 1, grid_width + 2)[1:-1])
+        epsilon_2d = np.dstack(np.meshgrid(epsilon, epsilon)).reshape(-1, 2)
+        return epsilon_2d
 
     def decode(self, z, n_batch=None):
-        graph = self._create_graph(mode='decode')
+        graph = self._create_graph()
         with tf.Session(graph=graph) as session:
             self.saver.restore(session, self.checkpoint_path)
             n_iter = n_batch // self.n_batch if n_batch is not None else 1
-            y = [session.run(self.y, {self.z: z[i*self.n_batch:(i+1)*self.n_batch]}) for i in range(n_iter)]
+            batch = lambda i: z[i * self.n_batch:(i + 1) * self.n_batch, :, np.newaxis]
+            y = [session.run(self.y, {self.z: batch(i)}) for i in range(n_iter)]
         return y
 
     def mosaic(self, grid_width=20):
@@ -137,8 +140,8 @@ class VAE(object):
 
 if __name__ == '__main__':
     data = input_data.read_data_sets('MNIST data')
-    vae = VAE()
-    vae.fit(data.train)
+    vae = VAE(activation=tf.nn.relu)
+    vae.fit(data.train, refit=True)
     mosaic = vae.mosaic()
     plt.imshow(mosaic, cmap='gray')
     plt.axis('off')
