@@ -1,3 +1,6 @@
+# Jan Kremer, 2017
+# Tensorflow implementation of the variational autoencoder, Kingma & Welling, 2014, https://arxiv.org/pdf/1312.6114.pdf
+
 import tensorflow as tf
 import numpy as np
 import time
@@ -151,7 +154,7 @@ class VAE(object):
 if __name__ == '__main__':
     data = input_data.read_data_sets('data')
     vae = VAE()
-    #vae.fit(data.train, data.validation)
+    vae.fit(data.train, data.validation)
     latent_space = vae.encode(data.test.images)
     mosaic = vae.mosaic()
 
