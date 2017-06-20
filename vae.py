@@ -151,7 +151,7 @@ class VAE(object):
         loss = tf.reduce_mean(regularizer + recon_error)
         return loss
 
-    def _create_optimizer(loss, learning_rate):
+    def _create_optimizer(self, loss, learning_rate):
         """Creates the optimizing operation for a given initial learning rate.
 
         Uses the ADAM optimizer to adaptively shrink the inital learning rate over time.
@@ -315,5 +315,5 @@ if __name__ == '__main__':
     ax3.legend(frameon=True)
     sns.despine()
     f.tight_layout()
-    plt.savefig('vae.pdf', bbox_inches='tight')
+    plt.savefig('vae.png', bbox_inches='tight')
     plt.show()
