@@ -9,6 +9,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from scipy.stats import norm
 
+from tensorflow.contrib.keras import layers
 from tensorflow.examples.tutorials.mnist import input_data
 
 
@@ -23,44 +24,41 @@ class VAE(object):
     The remaing architecture and algorithm is as close to the description in the paper as possible.
     """
 
-    def __init__(self, n_batch=100, n_input=784, n_latent=2, n_hidden=500, learning_rate=0.001, stddev_init=0.1,
-                 bias_init=0.1, n_epoch=100, seed=0, checkpoint_path='checkpoints/model.ckpt'):
+    def __init__(self, n_batch=100, n_latent=2, n_hidden=500, learning_rate=0.001, n_epoch=100, seed=0,
+                 checkpoint_path='checkpoints/model.ckpt'):
         """Initialize the object.
 
         Args:
             n_batch: Mini-batch size.
-            n_input: Input dimension of the data, default set to support MNIST.
             n_latent: Dimensionality of the latent variables.
             n_hidden: Number of hidden neurons.
             learning_rate: The initial learning rate of the optimization algorithm.
-            stddev_init: Standard deviation of the normal distribution that initializes all multiplicative weights.
-            bias_init: The constant value to initialize the biases.
             n_epoch: Number of epochs to train the autoencoder.
             seed: A random seed to create reproducible results.
             checkpoint_path: Path to the optimized model parameters.
         """
         self.n_batch = n_batch
-        self.n_input = n_input
         self.n_latent = n_latent
         self.n_hidden = n_hidden
         self.learning_rate = learning_rate
-        self.stddev_init = stddev_init
-        self.bias_init = bias_init
         self.n_epoch = n_epoch
         self.seed = seed
         self.checkpoint_path = checkpoint_path
 
         self.learning_curve = {'train': [], 'val': []}
-        self.graph = self._create_graph()  # Create the computational graph at initialization.
 
-    def _create_graph(self):
+    def _create_graph(self, n_input):
         """Creates the computational graph of the model.
+
+        Args:
+            n_input: Feature dimension of input data.
 
         Returns:
             The computational graph.
         """
         with tf.Graph().as_default() as graph:
             tf.set_random_seed(self.seed)
+            self.n_input = n_input
             self.loss = self._create_model()
             self.optimizer = self._create_optimizer(self.loss, self.learning_rate)
             self.initializer = tf.global_variables_initializer()
@@ -76,20 +74,6 @@ class VAE(object):
         """
         self.saver.restore(session, self.checkpoint_path)
 
-    def _create_weights(self, shape):
-        """Create weights for an affine transformation of the given shape.
-
-        Args:
-            shape: Shape of the affine transformation.
-
-        Returns:
-            Multiplicative weight and bias variables.
-
-        """
-        W = tf.Variable(tf.random_normal(shape, stddev=self.stddev_init))
-        b = tf.Variable(tf.constant(self.bias_init, shape=[shape[1]], dtype=tf.float32))
-        return W, b
-
     def _create_encoder(self, x):
         """Creates the encoder network.
 
@@ -103,13 +87,10 @@ class VAE(object):
             mu, log_sigma, sigma_squared and sigma, the mean and different transformations of the std. deviation sigma.
 
         """
-        W3, b3 = self._create_weights([self.n_input, self.n_hidden])
-        W4, b4 = self._create_weights([self.n_hidden, self.n_latent])
-        W5, b5 = self._create_weights([self.n_hidden, self.n_latent])
+        h = layers.Dense(self.n_hidden, activation='relu')(x)
+        mu = layers.Dense(self.n_latent)(h)
+        log_sigma_squared = layers.Dense(self.n_latent)(h)
 
-        h = tf.nn.relu(x @ W3 + b3)
-        mu = h @ W4 + b4
-        log_sigma_squared = h @ W5 + b5
         sigma_squared = tf.exp(log_sigma_squared)
         sigma = tf.sqrt(sigma_squared)
         return mu, log_sigma_squared, sigma_squared, sigma
@@ -125,10 +106,8 @@ class VAE(object):
         Returns:
             y_logit, the logit of the output y and y, the output variable in [0,1]^D.
         """
-        W1, b1 = self._create_weights([self.n_latent, self.n_hidden])
-        W2, b2 = self._create_weights([self.n_hidden, self.n_input])
-
-        y_logit = tf.nn.relu(z @ W1 + b1) @ W2 + b2
+        h = layers.Dense(self.n_hidden, activation='relu')(z)
+        y_logit = layers.Dense(self.n_input)(h)
         y = tf.sigmoid(y_logit)
         return y_logit, y
 
@@ -192,6 +171,7 @@ class VAE(object):
         Returns:
             The optimized model itself.
         """
+        self.graph = self._create_graph(n_input=train.images.shape[1])  # Create the computational graph.
         session = tf.Session(graph=self.graph)
         coord = tf.train.Coordinator()  # Lets tensorflow handle multiple threads.
         threads = tf.train.start_queue_runners(session, coord)
