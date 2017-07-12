@@ -115,14 +115,12 @@ class VAE(object):
         """Creates the model consisting of encoder and decoder, and returns the loss.
 
         Returns:
-            The loss of the model given examples x and normal noise epsilon.
+            The loss of the model given examples x.
         """
 
         self.x = tf.placeholder(tf.float32, [None, self.n_input])  # Holds the mini-batch of input examples.
         self.mu, log_sigma_squared, sigma_squared, sigma = self._create_encoder(self.x)
-
-        self.epsilon = tf.placeholder(tf.float32, self.n_latent)  # Holds the normally distributed input noise.
-        self.z = self.mu + sigma * self.epsilon
+        self.z = tf.random_normal([self.n_latent], mean=self.mu, stddev=sigma)
         y_logit, self.y = self._create_decoder(self.z)
 
         regularizer = -0.5 * tf.reduce_sum(1 + log_sigma_squared - tf.square(self.mu) - sigma_squared, 1)
@@ -156,9 +154,8 @@ class VAE(object):
         Returns:
             The loss of the model given the supplied mini-batch of data.
         """
-        epsilon = np.random.randn(self.n_latent).astype(np.float32)
         ops = [self.loss, self.optimizer] if optimize else [self.loss]
-        loss = session.run(ops, {self.x: batch[0], self.epsilon: epsilon})[0]  # Ignore the label of the current batch.
+        loss = session.run(ops, {self.x: batch})[0]
         return loss
 
     def fit(self, train, validation):
@@ -178,7 +175,7 @@ class VAE(object):
         session.run(self.initializer)  # Initialize the network.
         n_step = train.num_examples // self.n_batch * self.n_epoch
         start = time.time()
-        np.random.seed(self.seed)
+        np.random.seed(self.seed)  # Fix the seed used for shuffling the input data.
 
         try:
             self.learning_curve['train'].clear()
@@ -186,8 +183,8 @@ class VAE(object):
             loss_train = 0.
             loss_val = 0.
             for step in range(n_step):
-                loss_train += self._compute_loss(session, train.next_batch(self.n_batch))
-                loss_val += self._compute_loss(session, validation.next_batch(self.n_batch), optimize=False)
+                loss_train += self._compute_loss(session, train.next_batch(self.n_batch)[0], optimize=True)
+                loss_val += self._compute_loss(session, validation.next_batch(self.n_batch)[0], optimize=False)
 
                 if (step * self.n_batch) % train.num_examples == 0 and step > 0:
                     train_error = self.n_batch / train.num_examples * loss_train
